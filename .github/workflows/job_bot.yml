@@ -1,0 +1,31 @@
+# Is file ko repo me .github/workflows/job_bot.yml naam se rakho
+name: Govt Job Bot
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # har 30 minute
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install feedparser requests beautifulsoup4
+      - run: python sarkari_bot.py
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: "@govermentjobsupdatestelegram"
+      - name: Save seen.json
+        run: |
+          git config user.name "bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add seen.json || true
+          git commit -m "update seen" || echo "no changes"
+          git push
