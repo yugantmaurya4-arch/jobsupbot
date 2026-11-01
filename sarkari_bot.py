@@ -166,6 +166,37 @@ def find_image(entry, soup):
     return None
 
 
+def page_image(page_url):
+    """Feed me image na mile to post ke page se og:image uthata hai."""
+    try:
+        r = requests.get(page_url, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        page = BeautifulSoup(r.text, "html.parser")
+        for attrs in ({"property": "og:image"}, {"name": "twitter:image"}):
+            tag = page.find("meta", attrs=attrs)
+            if tag and tag.get("content", "").startswith("http"):
+                return upscale(tag["content"])
+        # Post ke andar ki pehli badi image
+        for img in page.select(".post-body img, article img"):
+            src = img.get("src", "")
+            if src.startswith("http"):
+                return upscale(src)
+    except Exception as e:
+        print("Page image fetch failed:", e)
+    return None
+
+
+def download_image(url):
+    """Image khud download karta hai taaki Telegram ko hotlink block na jhele."""
+    r = requests.get(url, headers={**HEADERS, "Referer": "https://www.indgovtjobs.in/"}, timeout=30)
+    r.raise_for_status()
+    if "image" not in r.headers.get("Content-Type", ""):
+        raise ValueError("Not an image: " + r.headers.get("Content-Type", ""))
+    if len(r.content) > 9_000_000:
+        raise ValueError("Image too large")
+    return r.content
+
+
 def build_message(entry, soup):
     title = html.escape(entry.get("title", "No title"))
     fields = extract_fields(entry, soup)
@@ -191,9 +222,12 @@ def build_message(entry, soup):
     return "\n".join(lines)[:4000], html.escape(entry.get("title", ""))
 
 
-def tg(method, **data):
+def tg(method, files=None, **data):
     r = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",
-                      data={"chat_id": CHANNEL_ID, "parse_mode": "HTML", **data}, timeout=60)
+                      data={"chat_id": CHANNEL_ID, "parse_mode": "HTML", **data},
+                      files=files, timeout=60)
+    if not r.ok:
+        print("Telegram error:", r.status_code, r.text[:300])
     r.raise_for_status()
 
 
@@ -204,14 +238,16 @@ def plain_len(msg):
 def send_job(entry):
     soup = BeautifulSoup(entry_html(entry), "html.parser")
     msg, short_title = build_message(entry, soup)
-    image = find_image(entry, soup)
+    image = find_image(entry, soup) or page_image(entry.get("link", ""))
+    print("Image URL:", image)
 
     if image:
         try:
+            photo = {"photo": ("job.jpg", download_image(image))}
             if plain_len(msg) <= 1000:
-                tg("sendPhoto", photo=image, caption=msg)
+                tg("sendPhoto", files=photo, caption=msg)
                 return
-            tg("sendPhoto", photo=image, caption=f"🔔 <b>{short_title}</b>")
+            tg("sendPhoto", files=photo, caption=f"🔔 <b>{short_title}</b>")
             tg("sendMessage", text=msg, disable_web_page_preview=True)
             return
         except Exception as e:
